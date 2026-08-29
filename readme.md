@@ -27,10 +27,15 @@ Chainlit 网页输出部件名称和对应小图
 
 ```text
 agent/
-├─ llm_client.py       # DeepSeek API 单次通信
-├─ intent_parser.py    # 自然语言转 Intent
-├─ recommender.py      # 部件筛选和整套搭配推荐
-└─ app.py              # 命令行版总入口
+├─ models.py           # Intent、服装部件和推荐结果
+├─ message.py          # 单轮输入与回复消息处理
+├─ llm_client.py       # DeepSeek 客户端
+├─ agent.py            # WardrobeAgent 业务编排
+├─ tools/
+│  ├─ intent_parser.py # 意图解析工具
+│  ├─ recommender.py   # 穿搭推荐工具
+│  └─ registry.py      # 工具注册器
+└─ app.py              # 命令行入口
 .chainlit/
 └─ config.toml         # Chainlit 页面配置
 chainlit_app.py        # Chainlit 网页入口
@@ -77,7 +82,7 @@ Chainlit 会打开本地网页。用户输入一句搭配需求后，页面会�
 也可以运行命令行版本：
 
 ```powershell
-python agent\app.py
+python -m agent.app
 ```
 
 ## 当前算法逻辑
@@ -93,7 +98,7 @@ python agent\app.py
 | `primary_color` | 主色 | `None` |
 | `style_label` | 风格标签 | `None` |
 
-`intent_parser.py` 会先从 SQLite 读取数据库中实际存在的主属性、主色和风格标签，然后将这些合法值放入系统提示词。大模型必须只返回包含上述四个字段的 JSON：
+`IntentParserTool` 会先从 SQLite 读取数据库中实际存在的主属性、主色和风格标签，然后将这些合法值放入系统提示词。大模型必须只返回包含上述四个字段的 JSON：
 
 * 星级和颜色只有在用户明确提到时才填写。
 * 主属性和风格标签允许根据相近语义选择，例如将“可爱”理解为数据库中的相近主属性。
@@ -104,13 +109,13 @@ python agent\app.py
 
 ### 2. 部件筛选
 
-`recommend_outfits(intent)` 使用 SQLite 精确过滤候选部件。所有已指定条件之间采用 AND 关系，也就是部件必须同时满足全部条件。未指定的字段不参与过滤；星级未指定时仍只考虑 3、4、5 星部件。
+`OutfitRecommendationTool` 使用 SQLite 精确过滤候选部件。所有已指定条件之间采用 AND 关系，也就是部件必须同时满足全部条件。未指定的字段不参与过滤；星级未指定时仍只考虑 3、4、5 星部件。
 
 当前没有使用向量检索、相似度评分或排序模型，语义理解只发生在生成 `Intent` 的阶段。
 
 ### 3. 整套搭配推荐
 
-`recommend_complete_outfit(intent)` 在筛选结果上组成一套搭配：
+推荐工具在筛选结果上组成一套搭配：
 
 * 发型和鞋子是必需部件，每类最多选择一个。
 * 主体服装可以是“上衣＋下装”，也可以是一件“连衣裙”。

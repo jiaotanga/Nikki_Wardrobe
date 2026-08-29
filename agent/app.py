@@ -1,15 +1,11 @@
-"""换装推荐程序的最小入口。"""
+"""换装推荐程序的命令行入口。"""
 
 from __future__ import annotations
 
 import sys
 
-if __package__:
-    from .intent_parser import parse_intent_response, request_intent_analysis
-    from .recommender import recommend_complete_outfit
-else:  # 允许直接运行：python agent\app.py
-    from intent_parser import parse_intent_response, request_intent_analysis
-    from recommender import recommend_complete_outfit
+from .agent import WardrobeAgent
+from .message import UserMessage
 
 
 def main() -> int:
@@ -17,24 +13,15 @@ def main() -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
 
-    user_text = input("请输入搭配要求：").strip()
-
+    agent = WardrobeAgent()
     try:
-        llm_response = request_intent_analysis(user_text)
-        intent = parse_intent_response(llm_response)
-        outfit = recommend_complete_outfit(intent)
+        reply = agent.handle(UserMessage(input("请输入搭配要求：")))
     except (ValueError, RuntimeError, OSError) as error:
         print(f"推荐失败：{error}", file=sys.stderr)
         return 1
 
-    print(f"\n解析结果：{intent}")
-    if outfit["complete"]:
-        print("成功组成一套搭配：")
-    else:
-        print("无法组成完整搭配，缺少：" + "、".join(outfit["missing"]))
-
-    for item in outfit["items"]:
-        print(f"{item['type_zh']}：{item['name']}")
+    print(f"\n解析结果：{reply.intent}")
+    print(reply.content)
     return 0
 
 
