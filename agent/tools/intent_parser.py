@@ -32,14 +32,14 @@ class IntentParserTool:
         if not user_text:
             raise ValueError("用户输入不能为空")
 
-        allowed = self._load_allowed_values()
+        allowed = self.load_allowed_values()
         response = self.llm_client.generate(
             self._build_system_prompt(allowed),
             user_text,
         )
         return self._parse_response(response, allowed)
 
-    def _load_allowed_values(self) -> dict[str, list[str]]:
+    def load_allowed_values(self) -> dict[str, list[str]]:
         connection = sqlite3.connect(self.database_path)
         try:
             return {
@@ -61,6 +61,12 @@ class IntentParserTool:
                 "style_label": [
                     row[0]
                     for row in connection.execute("SELECT name FROM labels ORDER BY name")
+                ],
+                "item_type": [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT DISTINCT type FROM items ORDER BY type"
+                    )
                 ],
             }
         finally:
@@ -89,6 +95,13 @@ style_label 只能从这里选择：{json.dumps(allowed['style_label'], ensure_a
         except json.JSONDecodeError as error:
             raise ValueError("LLM 没有返回合法 JSON") from error
 
+        return IntentParserTool.parse_data(data, allowed)
+
+    @staticmethod
+    def parse_data(
+        data: object,
+        allowed: dict[str, list[str]],
+    ) -> Intent:
         if not isinstance(data, dict) or set(data) != INTENT_FIELDS:
             raise ValueError("Intent 必须且只能包含四个规定字段")
         if data["quality"] not in (None, 3, 4, 5):

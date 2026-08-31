@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
-from .models import Intent, OutfitRecommendation
+from .models import Intent, OutfitItem, OutfitRecommendation
 
 
 @dataclass(frozen=True)
@@ -20,7 +21,8 @@ class AgentMessage:
 
     content: str
     intent: Intent
-    recommendation: OutfitRecommendation
+    display_mode: Literal["outfit", "item_list"]
+    items: tuple[OutfitItem, ...]
 
 
 class MessageProcessor:
@@ -32,7 +34,7 @@ class MessageProcessor:
             raise ValueError("用户输入不能为空")
         return content
 
-    def build_reply(
+    def build_outfit_reply(
         self,
         intent: Intent,
         recommendation: OutfitRecommendation,
@@ -52,5 +54,24 @@ class MessageProcessor:
         return AgentMessage(
             content="\n".join(lines),
             intent=intent,
-            recommendation=recommendation,
+            display_mode="outfit",
+            items=recommendation.items,
+        )
+
+    def build_item_list_reply(
+        self,
+        intent: Intent,
+        items: tuple[OutfitItem, ...],
+    ) -> AgentMessage:
+        if items:
+            lines = [f"为你找到以下{items[0].type_zh}："]
+            lines.extend(f"- {item.name}" for item in items)
+        else:
+            lines = ["没有找到符合条件的服装。"]
+
+        return AgentMessage(
+            content="\n".join(lines),
+            intent=intent,
+            display_mode="item_list",
+            items=items,
         )

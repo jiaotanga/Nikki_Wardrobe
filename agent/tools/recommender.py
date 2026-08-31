@@ -11,6 +11,7 @@ from ..models import Intent, OutfitItem, OutfitRecommendation
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DATABASE_PATH = PROJECT_DIR / "data" / "database" / "dressup.db"
+DEFAULT_OUTFIT_ID = 10043
 ALLOWED_QUALITIES = (3, 4, 5)
 
 
@@ -28,7 +29,7 @@ class OutfitRecommendationTool:
         self.random_source = random_source or random.SystemRandom()
 
     def run(self, intent: Intent) -> OutfitRecommendation:
-        candidates = self._query_candidates(intent)
+        candidates = self.query_items(intent)
         by_type: dict[str, list[OutfitItem]] = {}
         for item in candidates:
             by_type.setdefault(item.type, []).append(item)
@@ -64,29 +65,59 @@ class OutfitRecommendationTool:
         for item_type in sorted(set(by_type) - core_types):
             selected.append(self.random_source.choice(by_type[item_type]))
 
-        missing: list[str] = []
-        if not by_type.get("hair"):
-            missing.append("发型")
-        if not by_type.get("shoes"):
-            missing.append("鞋子")
-        if garment_structure is None:
-            if not by_type.get("tops") and not by_type.get("bottoms"):
-                missing.append("上衣＋下装或连衣裙")
-            elif not by_type.get("tops"):
-                missing.append("上衣或连衣裙")
-            else:
-                missing.append("下装或连衣裙")
-
-        selected.sort(key=_outfit_item_sort_key)
-        return OutfitRecommendation(
-            complete=not missing,
-            missing=tuple(missing),
-            garment_structure=garment_structure,
+        return _build_recommendation(
+            selected,
             candidate_count=len(candidates),
-            items=tuple(selected),
+            garment_structure=garment_structure,
         )
 
-    def _query_candidates(self, intent: Intent) -> list[OutfitItem]:
+    def recommend_item(
+        self,
+        intent: Intent,
+        item_type: str,
+        excluded_item_ids: tuple[int, ...] = (),
+    ) -> OutfitItem:
+        """推荐指定类别的一件部件。"""
+
+        candidates = self.query_items(
+            intent,
+            item_type=item_type,
+            excluded_item_ids=excluded_item_ids,
+        )
+        if not candidates:
+            raise ValueError(f"没有找到符合条件的{item_type}部件")
+        return self.random_source.choice(candidates)
+
+    def load_outfit(
+        self,
+        outfit_id: int = DEFAULT_OUTFIT_ID,
+    ) -> OutfitRecommendation | None:
+        """按照套装 ID 读取一套已有搭配。"""
+
+        connection = sqlite3.connect(self.database_path)
+        try:
+            item_ids = tuple(
+                row[0]
+                for row in connection.execute(
+                    "SELECT item_id FROM outfit_items WHERE outfit_id = ?",
+                    (outfit_id,),
+                )
+            )
+        finally:
+            connection.close()
+
+        if not item_ids:
+            return None
+        items = self.query_items(Intent(), item_ids=item_ids)
+        return _build_recommendation(items, candidate_count=len(items))
+
+    def query_items(
+        self,
+        intent: Intent,
+        item_type: str | None = None,
+        item_ids: tuple[int, ...] = (),
+        excluded_item_ids: tuple[int, ...] = (),
+    ) -> list[OutfitItem]:
         if not isinstance(intent, Intent):
             raise TypeError("intent 必须是 Intent 对象")
         if not self.database_path.is_file():
@@ -122,6 +153,18 @@ class OutfitRecommendationTool:
                     """
                 )
                 parameters.append(intent.style_label)
+
+            if item_type is not None:
+                conditions.append("i.type = ?")
+                parameters.append(item_type)
+            if item_ids:
+                placeholders = ", ".join("?" for _ in item_ids)
+                conditions.append(f"i.id IN ({placeholders})")
+                parameters.extend(item_ids)
+            if excluded_item_ids:
+                placeholders = ", ".join("?" for _ in excluded_item_ids)
+                conditions.append(f"i.id NOT IN ({placeholders})")
+                parameters.extend(excluded_item_ids)
 
             query = f"""
                 SELECT
@@ -210,6 +253,41 @@ def _row_to_item(row: sqlite3.Row) -> OutfitItem:
         primary_color_hex=row["primary_color_hex"],
         style_labels=tuple(labels_text.split("|")) if labels_text else (),
         image_path=row["image_path"],
+    )
+
+
+def _build_recommendation(
+    items: list[OutfitItem],
+    candidate_count: int,
+    garment_structure: str | None = None,
+) -> OutfitRecommendation:
+    item_types = {item.type for item in items}
+    if garment_structure is None:
+        if "dresses" in item_types:
+            garment_structure = "dress"
+        elif {"tops", "bottoms"} <= item_types:
+            garment_structure = "separates"
+
+    missing: list[str] = []
+    if "hair" not in item_types:
+        missing.append("发型")
+    if "shoes" not in item_types:
+        missing.append("鞋子")
+    if garment_structure is None:
+        if "tops" not in item_types and "bottoms" not in item_types:
+            missing.append("上衣＋下装或连衣裙")
+        elif "tops" not in item_types:
+            missing.append("上衣或连衣裙")
+        else:
+            missing.append("下装或连衣裙")
+
+    items.sort(key=_outfit_item_sort_key)
+    return OutfitRecommendation(
+        complete=not missing,
+        missing=tuple(missing),
+        garment_structure=garment_structure,
+        candidate_count=candidate_count,
+        items=tuple(items),
     )
 
 

@@ -16,6 +16,22 @@ class Intent:
 
 
 @dataclass(frozen=True)
+class PlanStep:
+    """Planner 生成的一步穿搭操作。"""
+
+    action: str
+    item_type: str | None
+    intent: Intent
+
+
+@dataclass(frozen=True)
+class Plan:
+    """WardrobeAgent 需要顺序执行的操作。"""
+
+    steps: tuple[PlanStep, ...]
+
+
+@dataclass(frozen=True)
 class OutfitItem:
     """一件可用于搭配的服装部件。"""
 
