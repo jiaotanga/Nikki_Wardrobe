@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .models import Intent, OutfitItem, OutfitRecommendation
+from .models import OutfitItem, OutfitRecommendation, WardrobeQuery
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class AgentMessage:
     """Agent 处理一条用户消息后返回的结果。"""
 
     content: str
-    intent: Intent
+    query: WardrobeQuery
     display_mode: Literal["outfit", "item_list"]
     items: tuple[OutfitItem, ...]
 
@@ -36,7 +36,7 @@ class MessageProcessor:
 
     def build_outfit_reply(
         self,
-        intent: Intent,
+        query: WardrobeQuery,
         recommendation: OutfitRecommendation,
     ) -> AgentMessage:
         if recommendation.complete:
@@ -53,14 +53,14 @@ class MessageProcessor:
 
         return AgentMessage(
             content="\n".join(lines),
-            intent=intent,
+            query=query,
             display_mode="outfit",
             items=recommendation.items,
         )
 
     def build_item_list_reply(
         self,
-        intent: Intent,
+        query: WardrobeQuery,
         items: tuple[OutfitItem, ...],
     ) -> AgentMessage:
         if items:
@@ -71,7 +71,7 @@ class MessageProcessor:
 
         return AgentMessage(
             content="\n".join(lines),
-            intent=intent,
+            query=query,
             display_mode="item_list",
             items=items,
         )

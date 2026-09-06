@@ -10,7 +10,7 @@ DEFAULT_MODEL = "deepseek-v4-pro"
 
 
 class LLMClient(Protocol):
-    """意图解析工具需要的最小 LLM 接口。"""
+    """查询解析工具需要的最小 LLM 接口。"""
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         ...

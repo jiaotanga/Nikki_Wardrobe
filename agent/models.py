@@ -6,13 +6,15 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class Intent:
-    """用户的结构化穿搭要求；None 表示未指定。"""
+class WardrobeQuery:
+    """用户的结构化衣橱查询；None 表示未指定。"""
 
     main_style: str | None = None
     quality: int | None = None
     primary_color: str | None = None
     style_label: str | None = None
+    semantic_query: str | None = None
+    keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -21,7 +23,7 @@ class PlanStep:
 
     action: str
     item_type: str | None
-    intent: Intent
+    query: WardrobeQuery
 
 
 @dataclass(frozen=True)

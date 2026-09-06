@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
-from ..models import Intent, OutfitItem, OutfitRecommendation
+from ..models import OutfitItem, OutfitRecommendation, WardrobeQuery
 
 
 class OutfitItemReplacementTool:
@@ -15,7 +15,7 @@ class OutfitItemReplacementTool:
 
     def __init__(
         self,
-        recommend_item: Callable[[Intent, str, tuple[int, ...]], OutfitItem],
+        recommend_item: Callable[[WardrobeQuery, str, tuple[int, ...]], OutfitItem],
     ) -> None:
         self.recommend_item = recommend_item
 
@@ -23,7 +23,7 @@ class OutfitItemReplacementTool:
         self,
         current_outfit: OutfitRecommendation,
         item_type: str,
-        intent: Intent,
+        query: WardrobeQuery,
     ) -> OutfitRecommendation:
         current_items = tuple(
             item for item in current_outfit.items if item.type == item_type
@@ -32,7 +32,7 @@ class OutfitItemReplacementTool:
             raise ValueError(f"当前搭配中没有 {item_type} 部件")
 
         new_item = self.recommend_item(
-            intent,
+            query,
             item_type,
             tuple(item.id for item in current_items),
         )

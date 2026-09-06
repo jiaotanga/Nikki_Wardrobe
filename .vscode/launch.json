@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试 Chainlit",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "chainlit",
+      "args": [
+        "run",
+        "chainlit_app.py"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

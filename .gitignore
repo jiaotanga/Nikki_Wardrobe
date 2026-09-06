@@ -1,4 +1,4 @@
 *.pyc
 .env
-data/raw/
+data/
 __pycache__/

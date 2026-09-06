@@ -20,7 +20,7 @@ def main() -> int:
         print(f"推荐失败：{error}", file=sys.stderr)
         return 1
 
-    print(f"\n解析结果：{reply.intent}")
+    print(f"\n解析结果：{reply.query}")
     print(reply.content)
     return 0
 

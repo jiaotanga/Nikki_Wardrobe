@@ -1,4 +1,4 @@
-"""根据结构化 Intent 生成完整穿搭的推荐工具。"""
+"""根据结构化 WardrobeQuery 生成完整穿搭的推荐工具。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import random
 import sqlite3
 from pathlib import Path
 
-from ..models import Intent, OutfitItem, OutfitRecommendation
+from ..models import OutfitItem, OutfitRecommendation, WardrobeQuery
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -28,8 +28,8 @@ class OutfitRecommendationTool:
         self.database_path = Path(database_path)
         self.random_source = random_source or random.SystemRandom()
 
-    def run(self, intent: Intent) -> OutfitRecommendation:
-        candidates = self.query_items(intent)
+    def run(self, query: WardrobeQuery) -> OutfitRecommendation:
+        candidates = self.query_items(query)
         by_type: dict[str, list[OutfitItem]] = {}
         for item in candidates:
             by_type.setdefault(item.type, []).append(item)
@@ -73,14 +73,14 @@ class OutfitRecommendationTool:
 
     def recommend_item(
         self,
-        intent: Intent,
+        query: WardrobeQuery,
         item_type: str,
         excluded_item_ids: tuple[int, ...] = (),
     ) -> OutfitItem:
         """推荐指定类别的一件部件。"""
 
         candidates = self.query_items(
-            intent,
+            query,
             item_type=item_type,
             excluded_item_ids=excluded_item_ids,
         )
@@ -108,38 +108,38 @@ class OutfitRecommendationTool:
 
         if not item_ids:
             return None
-        items = self.query_items(Intent(), item_ids=item_ids)
+        items = self.query_items(WardrobeQuery(), item_ids=item_ids)
         return _build_recommendation(items, candidate_count=len(items))
 
     def query_items(
         self,
-        intent: Intent,
+        query: WardrobeQuery,
         item_type: str | None = None,
         item_ids: tuple[int, ...] = (),
         excluded_item_ids: tuple[int, ...] = (),
     ) -> list[OutfitItem]:
-        if not isinstance(intent, Intent):
-            raise TypeError("intent 必须是 Intent 对象")
+        if not isinstance(query, WardrobeQuery):
+            raise TypeError("query 必须是 WardrobeQuery 对象")
         if not self.database_path.is_file():
             raise FileNotFoundError(f"找不到数据库：{self.database_path}")
 
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         try:
-            _validate_intent(connection, intent)
+            _validate_query(connection, query)
             conditions = ["i.quality IN (3, 4, 5)"]
             parameters: list[object] = []
 
-            if intent.main_style is not None:
+            if query.main_style is not None:
                 conditions.append("i.main_style_zh = ?")
-                parameters.append(intent.main_style)
-            if intent.quality is not None:
+                parameters.append(query.main_style)
+            if query.quality is not None:
                 conditions.append("i.quality = ?")
-                parameters.append(intent.quality)
-            if intent.primary_color is not None:
+                parameters.append(query.quality)
+            if query.primary_color is not None:
                 conditions.append("primary_color.family = ?")
-                parameters.append(intent.primary_color)
-            if intent.style_label is not None:
+                parameters.append(query.primary_color)
+            if query.style_label is not None:
                 conditions.append(
                     """
                     EXISTS (
@@ -152,7 +152,13 @@ class OutfitRecommendationTool:
                     )
                     """
                 )
-                parameters.append(intent.style_label)
+                parameters.append(query.style_label)
+            if query.keywords:
+                keyword_conditions = [
+                    "i.summary_zh LIKE ?" for _ in query.keywords
+                ]
+                conditions.append(f"({' OR '.join(keyword_conditions)})")
+                parameters.extend(f"%{keyword}%" for keyword in query.keywords)
 
             if item_type is not None:
                 conditions.append("i.type = ?")
@@ -201,25 +207,25 @@ class OutfitRecommendationTool:
             connection.close()
 
 
-def _validate_intent(connection: sqlite3.Connection, intent: Intent) -> None:
-    if intent.quality is not None and intent.quality not in ALLOWED_QUALITIES:
+def _validate_query(connection: sqlite3.Connection, query: WardrobeQuery) -> None:
+    if query.quality is not None and query.quality not in ALLOWED_QUALITIES:
         raise ValueError("quality 只能是 3、4、5 或 None")
 
     _validate_database_value(
         connection,
-        intent.main_style,
+        query.main_style,
         "SELECT 1 FROM items WHERE main_style_zh = ? LIMIT 1",
         "主属性",
     )
     _validate_database_value(
         connection,
-        intent.primary_color,
+        query.primary_color,
         "SELECT 1 FROM item_colors WHERE role = 'primary' AND family = ? LIMIT 1",
         "主色",
     )
     _validate_database_value(
         connection,
-        intent.style_label,
+        query.style_label,
         "SELECT 1 FROM labels WHERE name = ? LIMIT 1",
         "风格标签",
     )

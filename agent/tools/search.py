@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..models import Intent, OutfitItem
+from ..models import OutfitItem, WardrobeQuery
 
 
 SEARCH_RESULT_LIMIT = 12
@@ -21,6 +21,6 @@ class ItemSearchTool:
     ) -> None:
         self.query_items = query_items
 
-    def run(self, intent: Intent, item_type: str) -> tuple[OutfitItem, ...]:
-        items = self.query_items(intent, item_type=item_type)
+    def run(self, query: WardrobeQuery, item_type: str) -> tuple[OutfitItem, ...]:
+        items = self.query_items(query, item_type=item_type)
         return tuple(items[:SEARCH_RESULT_LIMIT])

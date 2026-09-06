@@ -12,7 +12,7 @@
 ```text
 用户输入一句自然语言需求
         ↓
-Planner 将需求解析为 Plan 和 Intent
+Planner 将需求解析为 Plan 和 WardrobeQuery
         ↓
 推荐整套搭配、替换当前部件，或搜索指定类别服装
         ↓
@@ -27,18 +27,21 @@ Chainlit 网页输出部件名称和对应小图
 
 ```text
 agent/
-├─ models.py           # Intent、服装部件和推荐结果
+├─ models.py           # WardrobeQuery、服装部件和推荐结果
 ├─ message.py          # 单轮输入与回复消息处理
 ├─ llm_client.py       # DeepSeek 客户端
 ├─ planner.py          # 生成推荐、替换或搜索的 Plan
 ├─ agent.py            # WardrobeAgent 业务编排
 ├─ tools/
-│  ├─ intent_parser.py # Intent 合法值读取与校验
+│  ├─ wardrobe_query_parser.py # WardrobeQuery 合法值读取与校验
 │  ├─ recommender.py   # 整套和单品推荐工具
 │  ├─ outfit_editor.py # 当前搭配部件替换工具
 │  ├─ search.py        # 指定类别服装搜索工具
 │  └─ registry.py      # 工具注册器
 └─ app.py              # 命令行入口
+data_pipeline/
+├─ build_database.py   # 校验部件 JSON/图片并全量构建 SQLite
+└─ README.md           # 数据集构建说明
 .chainlit/
 └─ config.toml         # Chainlit 页面配置
 chainlit_app.py        # Chainlit 网页入口
@@ -70,7 +73,18 @@ DEEPSEEK_MODEL="模型名称"
 data/database/dressup.db
 ```
 
-部件图片保存在 `data/raw/images/`。
+部件 JSON 和对应图片分别保存在：
+
+```text
+data/raw/items/
+data/raw/images/
+```
+
+可以从这两类原始数据重新构建数据库：
+
+```powershell
+python -m data_pipeline.build_database
+```
 
 ### 运行网页
 
@@ -90,9 +104,9 @@ python -m agent.app
 
 ## 当前算法逻辑
 
-### 1. 计划与意图解析
+### 1. 计划与查询解析
 
-`Intent` 目前固定包含四个可选字段：
+`WardrobeQuery` 目前固定包含四个可选字段：
 
 | 字段 | 含义 | 未指定时 |
 | --- | --- | --- |
@@ -101,20 +115,20 @@ python -m agent.app
 | `primary_color` | 主色 | `None` |
 | `style_label` | 风格标签 | `None` |
 
-`WardrobePlanner` 会从 SQLite 读取合法值，并将用户输入解析为 `Plan`。当前 Plan 支持推荐一整套搭配、替换一个部件和搜索指定类别服装，同时包含本轮的 `Intent`：
+`WardrobePlanner` 会从 SQLite 读取合法值，并将用户输入解析为 `Plan`。当前 Plan 支持推荐一整套搭配、替换一个部件和搜索指定类别服装，同时包含本轮的 `WardrobeQuery`：
 
 * 星级和颜色只有在用户明确提到时才填写。
 * 主属性和风格标签允许根据相近语义选择，例如将“可爱”理解为数据库中的相近主属性。
 * 没有指定或没有合适值时返回 `null`。
 * 风格标签必须来自数据库，不能由模型自行创造。
 
-模型返回后，程序还会检查 JSON 字段、星级范围和数据库合法值，验证通过后才生成 `Intent`。
+模型返回后，程序还会检查 JSON 字段、星级范围和数据库合法值，验证通过后才生成 `WardrobeQuery`。
 
 ### 2. 部件筛选
 
 `OutfitRecommendationTool` 使用 SQLite 精确过滤候选部件。所有已指定条件之间采用 AND 关系，也就是部件必须同时满足全部条件。未指定的字段不参与过滤；星级未指定时仍只考虑 3、4、5 星部件。
 
-当前没有使用向量检索、相似度评分或排序模型，语义理解只发生在生成 `Intent` 的阶段。
+当前没有使用向量检索、相似度评分或排序模型，语义理解只发生在生成 `WardrobeQuery` 的阶段。
 
 ### 3. 整套搭配推荐
 
@@ -133,13 +147,13 @@ python -m agent.app
 
 ### 5. 服装搜索
 
-搜索工具复用同一个候选查询，根据 `Intent` 和服装类别返回前 12 条结果。搜索只输出服装列表，不会修改当前搭配或当前搭配条件。
+搜索工具复用同一个候选查询，根据 `WardrobeQuery` 和服装类别返回前 12 条结果。搜索只输出服装列表，不会修改当前搭配或当前搭配条件。
 
 这一版属于基于标签的最小规则算法，暂时没有考虑部件之间的色彩协调、风格权重、套装关联、获取方式或用户历史偏好。
 
 ## 数据来源与数据库维护
 
-仓库保留推荐程序运行所需的数据库和部件图片，不公开资源抓取与内部数据处理脚本。更新数据后，应保持数据库位于 `data/database/dressup.db`，图片位于 `data/raw/images/`。
+项目内保留了从部件 JSON 和图片构建运行时 SQLite 数据库的数据集流水线；资源抓取仍由外部数据工程负责。更新原始数据后，应保持 JSON 位于 `data/raw/items/`、图片位于 `data/raw/images/`，然后运行 `python -m data_pipeline.build_database` 重新生成 `data/database/dressup.db`。
 
 ## 致谢
 
