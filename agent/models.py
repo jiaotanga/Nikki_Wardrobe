@@ -12,9 +12,17 @@ class WardrobeQuery:
     main_style: str | None = None
     quality: int | None = None
     primary_color: str | None = None
-    style_label: str | None = None
+    item_name: str | None = None
     semantic_query: str | None = None
     keywords: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ItemRequest:
+    """指定一个部件类别及其独立查询条件。"""
+
+    item_type: str | None
+    query: WardrobeQuery
 
 
 @dataclass(frozen=True)
@@ -24,6 +32,7 @@ class PlanStep:
     action: str
     item_type: str | None
     query: WardrobeQuery
+    item_requests: tuple[ItemRequest, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,7 @@ class OutfitItem:
     primary_color: str
     primary_color_hex: str
     style_labels: tuple[str, ...]
+    summary_zh: str | None
     image_path: str
 
 

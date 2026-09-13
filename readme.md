@@ -40,8 +40,9 @@ agent/
 │  └─ registry.py      # 工具注册器
 └─ app.py              # 命令行入口
 data_pipeline/
-├─ build_database.py   # 校验部件 JSON/图片并全量构建 SQLite
-└─ README.md           # 数据集构建说明
+├─ build_database.py        # 校验部件 JSON/图片并全量构建 SQLite
+├─ build_text_embeddings.py # 生成部件描述的离线文本向量
+└─ README.md                # 数据集构建说明
 .chainlit/
 └─ config.toml         # Chainlit 页面配置
 chainlit_app.py        # Chainlit 网页入口
@@ -66,6 +67,20 @@ DEEPSEEK_API_KEY="你的 API Key"
 ```text
 DEEPSEEK_MODEL="模型名称"
 ```
+
+文本向量模型下载到项目的 `models/` 目录：
+
+```powershell
+hf download Qwen/Qwen3-Embedding-0.6B --local-dir .\models\Qwen3-Embedding-0.6B
+```
+
+所有部件描述生成完成后，可以建立离线文本向量：
+
+```powershell
+python -m data_pipeline.build_text_embeddings
+```
+
+脚本使用本地 `Qwen3-Embedding-0.6B`，将每个 `summary_zh` 转换为归一化的 1024 维向量，并保存到 `data/derived/v1/text_embeddings.npz`。
 
 推荐器读取的数据库位置为：
 
@@ -106,29 +121,33 @@ python -m agent.app
 
 ### 1. 计划与查询解析
 
-`WardrobeQuery` 目前固定包含四个可选字段：
+`WardrobeQuery` 包含硬筛选条件和模糊描述：
 
 | 字段 | 含义 | 未指定时 |
 | --- | --- | --- |
 | `main_style` | 主属性 | `None` |
 | `quality` | 星级，只允许 3、4、5 | `None` |
 | `primary_color` | 主色 | `None` |
-| `style_label` | 风格标签 | `None` |
+| `item_name` | 部件确切名称 | `None` |
+| `semantic_query` | 无法归入硬条件的完整描述 | `None` |
+| `keywords` | 从模糊描述中提取的视觉关键词 | `()` |
 
 `WardrobePlanner` 会从 SQLite 读取合法值，并将用户输入解析为 `Plan`。当前 Plan 支持推荐一整套搭配、替换一个部件和搜索指定类别服装，同时包含本轮的 `WardrobeQuery`：
 
-* 星级和颜色只有在用户明确提到时才填写。
-* 主属性和风格标签允许根据相近语义选择，例如将“可爱”理解为数据库中的相近主属性。
-* 没有指定或没有合适值时返回 `null`。
-* 风格标签必须来自数据库，不能由模型自行创造。
+* 星级只有在用户明确提到星级或品质时才填写，“最高品质”解析为 5 星。
+* 主属性只有在用户明确指定“主属性”或“属性”时才填写，不根据视觉风格推断。
+* 主色只有在用户明确提到颜色时才填写。
+* 部件名称只有在用户明确指定确切名称时才填写，并使用 SQLite 精确匹配。
+* 模糊要求保存在 `semantic_query`，同时提取“珍珠”“双马尾”等最小有效词放入 `keywords`。
+* 没有指定或没有合适值时返回 `null`，`keywords` 则返回空数组。
 
 模型返回后，程序还会检查 JSON 字段、星级范围和数据库合法值，验证通过后才生成 `WardrobeQuery`。
 
 ### 2. 部件筛选
 
-`OutfitRecommendationTool` 使用 SQLite 精确过滤候选部件。所有已指定条件之间采用 AND 关系，也就是部件必须同时满足全部条件。未指定的字段不参与过滤；星级未指定时仍只考虑 3、4、5 星部件。
+`OutfitRecommendationTool` 先使用 SQLite 精确过滤硬条件，再用 `keywords` 对离线生成的 `summary_zh` 做动态 `LIKE` 匹配。硬条件之间采用 AND，多个关键词之间采用 OR；没有关键词时不增加文本条件。
 
-当前没有使用向量检索、相似度评分或排序模型，语义理解只发生在生成 `WardrobeQuery` 的阶段。
+当前已经生成部件描述的离线文本向量，但尚未接入运行时向量检索；`semantic_query` 将作为查询向量的输入。
 
 ### 3. 整套搭配推荐
 
@@ -147,7 +166,7 @@ python -m agent.app
 
 ### 5. 服装搜索
 
-搜索工具复用同一个候选查询，根据 `WardrobeQuery` 和服装类别返回前 12 条结果。搜索只输出服装列表，不会修改当前搭配或当前搭配条件。
+搜索工具复用同一个候选查询，根据硬条件、服装类别和描述关键词返回前 12 条结果。搜索只输出服装列表，不会修改当前搭配或当前搭配条件。
 
 这一版属于基于标签的最小规则算法，暂时没有考虑部件之间的色彩协调、风格权重、套装关联、获取方式或用户历史偏好。
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .models import OutfitItem, OutfitRecommendation, WardrobeQuery
+from .models import ItemRequest, OutfitItem, OutfitRecommendation, WardrobeQuery
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class AgentMessage:
     query: WardrobeQuery
     display_mode: Literal["outfit", "item_list"]
     items: tuple[OutfitItem, ...]
+    item_requests: tuple[ItemRequest, ...] = ()
 
 
 class MessageProcessor:
@@ -38,6 +39,7 @@ class MessageProcessor:
         self,
         query: WardrobeQuery,
         recommendation: OutfitRecommendation,
+        item_requests: tuple[ItemRequest, ...] = (),
     ) -> AgentMessage:
         if recommendation.complete:
             lines = ["为你推荐以下搭配："]
@@ -45,9 +47,7 @@ class MessageProcessor:
             missing = "、".join(recommendation.missing)
             lines = [f"暂时无法组成完整搭配（缺少：{missing}），已有部件如下："]
 
-        lines.extend(
-            f"- {item.type_zh}：{item.name}" for item in recommendation.items
-        )
+        lines.extend(_format_item(item) for item in recommendation.items)
         if not recommendation.items:
             lines.append("没有找到符合条件的部件。")
 
@@ -56,6 +56,7 @@ class MessageProcessor:
             query=query,
             display_mode="outfit",
             items=recommendation.items,
+            item_requests=item_requests,
         )
 
     def build_item_list_reply(
@@ -65,7 +66,7 @@ class MessageProcessor:
     ) -> AgentMessage:
         if items:
             lines = [f"为你找到以下{items[0].type_zh}："]
-            lines.extend(f"- {item.name}" for item in items)
+            lines.extend(_format_item(item) for item in items)
         else:
             lines = ["没有找到符合条件的服装。"]
 
@@ -75,3 +76,11 @@ class MessageProcessor:
             display_mode="item_list",
             items=items,
         )
+
+
+def _format_item(item: OutfitItem) -> str:
+    return (
+        f"- {item.type_zh}：{item.name}\n"
+        f"  编号：{item.id}\n"
+        f"  描述：{item.summary_zh or '暂无'}"
+    )

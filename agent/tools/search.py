@@ -21,6 +21,10 @@ class ItemSearchTool:
     ) -> None:
         self.query_items = query_items
 
-    def run(self, query: WardrobeQuery, item_type: str) -> tuple[OutfitItem, ...]:
+    def run(
+        self,
+        query: WardrobeQuery,
+        item_type: str | None,
+    ) -> tuple[OutfitItem, ...]:
         items = self.query_items(query, item_type=item_type)
         return tuple(items[:SEARCH_RESULT_LIMIT])

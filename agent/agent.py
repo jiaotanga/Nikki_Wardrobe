@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .message import AgentMessage, MessageProcessor, UserMessage
-from .models import OutfitRecommendation, WardrobeQuery
+from .models import ItemRequest, OutfitRecommendation, WardrobeQuery
 from .planner import WardrobePlanner
 from .tools import (
     ItemSearchTool,
@@ -53,14 +53,21 @@ class WardrobeAgent:
         plan = self.planner.create_plan(user_text, self.current_outfit)
         query = self.current_query
         outfit = self.current_outfit
+        item_requests = ()
 
         for step in plan.steps:
             if step.action == "recommend_outfit":
                 query = step.query
-                outfit = self.tools.call("recommend_outfit", query)
+                item_requests = step.item_requests
+                outfit = self.tools.call(
+                    "recommend_outfit",
+                    query,
+                    step.item_requests,
+                )
             elif step.action == "replace_item":
                 if step.item_type is None:
                     raise ValueError("替换部件时必须指定部件类别")
+                item_requests = (ItemRequest(step.item_type, step.query),)
                 query = _merge_query(query, step.query)
                 outfit = self.tools.call(
                     "replace_item",
@@ -69,14 +76,12 @@ class WardrobeAgent:
                     query,
                 )
             elif step.action == "search_items":
-                if step.item_type is None:
-                    raise ValueError("搜索服装时必须指定部件类别")
                 items = self.tools.call("search_items", step.query, step.item_type)
                 return self.message_processor.build_item_list_reply(step.query, items)
 
         self.current_query = query
         self.current_outfit = outfit
-        return self.message_processor.build_outfit_reply(query, outfit)
+        return self.message_processor.build_outfit_reply(query, outfit, item_requests)
 
 
 def _merge_query(current: WardrobeQuery, update: WardrobeQuery) -> WardrobeQuery:
@@ -84,7 +89,7 @@ def _merge_query(current: WardrobeQuery, update: WardrobeQuery) -> WardrobeQuery
         main_style=update.main_style or current.main_style,
         quality=update.quality or current.quality,
         primary_color=update.primary_color or current.primary_color,
-        style_label=update.style_label or current.style_label,
+        item_name=update.item_name or current.item_name,
         semantic_query=update.semantic_query or current.semantic_query,
         keywords=update.keywords or current.keywords,
     )

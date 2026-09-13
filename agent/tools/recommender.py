@@ -6,7 +6,8 @@ import random
 import sqlite3
 from pathlib import Path
 
-from ..models import OutfitItem, OutfitRecommendation, WardrobeQuery
+from ..models import ItemRequest, OutfitItem, OutfitRecommendation, WardrobeQuery
+from .semantic_search import SemanticSearch
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -27,43 +28,78 @@ class OutfitRecommendationTool:
     ) -> None:
         self.database_path = Path(database_path)
         self.random_source = random_source or random.SystemRandom()
+        self.semantic_search: SemanticSearch | None = None
 
-    def run(self, query: WardrobeQuery) -> OutfitRecommendation:
+    def run(
+        self,
+        query: WardrobeQuery,
+        item_requests: tuple[ItemRequest, ...] = (),
+    ) -> OutfitRecommendation:
+        selected: list[OutfitItem] = []
+        selected_types: set[str] = set()
+        for request in item_requests:
+            item = self.recommend_item(request.query, request.item_type)
+            if item.type in selected_types:
+                raise ValueError(f"重复指定了{item.type}部件")
+            selected.append(item)
+            selected_types.add(item.type)
+
+        if "dresses" in selected_types and {"tops", "bottoms"} & selected_types:
+            raise ValueError("不能同时指定连衣裙和上衣或下装")
+
         candidates = self.query_items(query)
         by_type: dict[str, list[OutfitItem]] = {}
         for item in candidates:
             by_type.setdefault(item.type, []).append(item)
 
-        selected: list[OutfitItem] = []
-        for item_type in ("hair", "shoes"):
-            if by_type.get(item_type):
-                selected.append(self.random_source.choice(by_type[item_type]))
+        def add_item(item_type: str) -> None:
+            if item_type in selected_types or not by_type.get(item_type):
+                return
+            selected.append(
+                self.recommend_item(
+                    query,
+                    item_type,
+                    candidate_items=by_type[item_type],
+                )
+            )
+            selected_types.add(item_type)
 
-        has_separates = bool(by_type.get("tops")) and bool(by_type.get("bottoms"))
-        has_dress = bool(by_type.get("dresses"))
-        first_structure = self.random_source.choice(("separates", "dress"))
-        second_structure = "dress" if first_structure == "separates" else "separates"
+        for item_type in ("hair", "shoes"):
+            add_item(item_type)
+
+        available_types = set(by_type) | selected_types
+        has_separates = {"tops", "bottoms"} <= available_types
+        has_dress = "dresses" in available_types
+        if "dresses" in selected_types:
+            structures = ("dress",)
+        elif {"tops", "bottoms"} & selected_types:
+            structures = ("separates",)
+        else:
+            first_structure = self.random_source.choice(("separates", "dress"))
+            second_structure = (
+                "dress" if first_structure == "separates" else "separates"
+            )
+            structures = (first_structure, second_structure)
         garment_structure: str | None = None
 
-        for structure in (first_structure, second_structure):
+        for structure in structures:
             if structure == "separates" and has_separates:
                 garment_structure = "separates"
-                selected.append(self.random_source.choice(by_type["tops"]))
-                selected.append(self.random_source.choice(by_type["bottoms"]))
+                add_item("tops")
+                add_item("bottoms")
                 break
             if structure == "dress" and has_dress:
                 garment_structure = "dress"
-                selected.append(self.random_source.choice(by_type["dresses"]))
+                add_item("dresses")
                 break
 
         if garment_structure is None:
             for item_type in ("tops", "bottoms"):
-                if by_type.get(item_type):
-                    selected.append(self.random_source.choice(by_type[item_type]))
+                add_item(item_type)
 
         core_types = {"hair", "shoes", "tops", "bottoms", "dresses"}
         for item_type in sorted(set(by_type) - core_types):
-            selected.append(self.random_source.choice(by_type[item_type]))
+            add_item(item_type)
 
         return _build_recommendation(
             selected,
@@ -74,18 +110,29 @@ class OutfitRecommendationTool:
     def recommend_item(
         self,
         query: WardrobeQuery,
-        item_type: str,
+        item_type: str | None = None,
         excluded_item_ids: tuple[int, ...] = (),
+        candidate_items: list[OutfitItem] | None = None,
     ) -> OutfitItem:
         """推荐指定类别的一件部件。"""
 
-        candidates = self.query_items(
-            query,
-            item_type=item_type,
-            excluded_item_ids=excluded_item_ids,
-        )
+        if item_type is None and query.item_name is None:
+            raise ValueError("未指定类别时必须提供确切部件名称")
+
+        if candidate_items is None:
+            candidates = self.query_items(
+                query,
+                item_type=item_type,
+                excluded_item_ids=excluded_item_ids,
+            )
+        else:
+            candidates = [
+                item
+                for item in candidate_items
+                if item.type == item_type and item.id not in excluded_item_ids
+            ]
         if not candidates:
-            raise ValueError(f"没有找到符合条件的{item_type}部件")
+            raise ValueError(f"没有找到符合条件的{item_type or query.item_name}部件")
         return self.random_source.choice(candidates)
 
     def load_outfit(
@@ -139,27 +186,9 @@ class OutfitRecommendationTool:
             if query.primary_color is not None:
                 conditions.append("primary_color.family = ?")
                 parameters.append(query.primary_color)
-            if query.style_label is not None:
-                conditions.append(
-                    """
-                    EXISTS (
-                        SELECT 1
-                        FROM item_labels AS wanted_item_label
-                        JOIN labels AS wanted_label
-                          ON wanted_label.id = wanted_item_label.label_id
-                        WHERE wanted_item_label.item_id = i.id
-                          AND wanted_label.name = ?
-                    )
-                    """
-                )
-                parameters.append(query.style_label)
-            if query.keywords:
-                keyword_conditions = [
-                    "i.summary_zh LIKE ?" for _ in query.keywords
-                ]
-                conditions.append(f"({' OR '.join(keyword_conditions)})")
-                parameters.extend(f"%{keyword}%" for keyword in query.keywords)
-
+            if query.item_name is not None:
+                conditions.append("i.name = ?")
+                parameters.append(query.item_name)
             if item_type is not None:
                 conditions.append("i.type = ?")
                 parameters.append(item_type)
@@ -172,7 +201,7 @@ class OutfitRecommendationTool:
                 conditions.append(f"i.id NOT IN ({placeholders})")
                 parameters.extend(excluded_item_ids)
 
-            query = f"""
+            base_sql = f"""
                 SELECT
                     i.id,
                     i.name,
@@ -181,6 +210,7 @@ class OutfitRecommendationTool:
                     i.type_zh,
                     i.main_style,
                     i.main_style_zh,
+                    i.summary_zh,
                     primary_color.family AS primary_color,
                     primary_color.hex AS primary_color_hex,
                     i.image_path,
@@ -199,9 +229,40 @@ class OutfitRecommendationTool:
                   ON primary_color.item_id = i.id
                  AND primary_color.role = 'primary'
                 WHERE {' AND '.join(conditions)}
-                ORDER BY i.id
             """
-            rows = connection.execute(query, parameters).fetchall()
+            rows = connection.execute(
+                f"{base_sql} ORDER BY i.id",
+                parameters,
+            ).fetchall()
+            if query.semantic_query:
+                keyword_conditions = [
+                    "i.summary_zh LIKE ?" for _ in query.keywords
+                ]
+                keyword_rows = (
+                    connection.execute(
+                        f"{base_sql} AND ({' OR '.join(keyword_conditions)}) "
+                        "ORDER BY i.id",
+                        [
+                            *parameters,
+                            *(f"%{keyword}%" for keyword in query.keywords),
+                        ],
+                    ).fetchall()
+                    if keyword_conditions
+                    else []
+                )
+                if self.semantic_search is None:
+                    self.semantic_search = SemanticSearch()
+                semantic_ids = self.semantic_search.search(
+                    query.semantic_query,
+                    [int(row["id"]) for row in rows],
+                )
+                keyword_ids = {int(row["id"]) for row in keyword_rows}
+                rows_by_id = {int(row["id"]): row for row in rows}
+                rows = keyword_rows + [
+                    rows_by_id[item_id]
+                    for item_id in semantic_ids
+                    if item_id not in keyword_ids
+                ]
             return [_row_to_item(row) for row in rows]
         finally:
             connection.close()
@@ -225,12 +286,10 @@ def _validate_query(connection: sqlite3.Connection, query: WardrobeQuery) -> Non
     )
     _validate_database_value(
         connection,
-        query.style_label,
-        "SELECT 1 FROM labels WHERE name = ? LIMIT 1",
-        "风格标签",
+        query.item_name,
+        "SELECT 1 FROM items WHERE name = ? LIMIT 1",
+        "部件名称",
     )
-
-
 def _validate_database_value(
     connection: sqlite3.Connection,
     value: str | None,
@@ -258,6 +317,7 @@ def _row_to_item(row: sqlite3.Row) -> OutfitItem:
         primary_color=row["primary_color"],
         primary_color_hex=row["primary_color_hex"],
         style_labels=tuple(labels_text.split("|")) if labels_text else (),
+        summary_zh=row["summary_zh"],
         image_path=row["image_path"],
     )
 
