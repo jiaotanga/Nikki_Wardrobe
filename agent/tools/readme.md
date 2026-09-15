@@ -36,7 +36,7 @@ ItemRequest(
 
 ### `OutfitRecommendationTool`
 
-- `query_items(query, item_type=None)`：使用 SQLite 硬筛选、关键词匹配和文本向量检索获得候选部件。
+- `query_items(query, item_type=None, included_item_types=())`：使用 SQLite 硬筛选、关键词匹配和文本向量检索获得候选部件；整套搭配可通过 `included_item_types` 提前排除本轮未选中的可选类别。
 - `recommend_item(query, item_type=None)`：从候选中推荐一个部件；未指定类别时必须提供 `item_name`。
 - `run(query, item_requests=())`：先调用 `recommend_item` 完成各项指定要求，再补齐其他类别并组成整套搭配。
 - `load_outfit(outfit_id)`：从数据库读取已有套装。
@@ -54,6 +54,8 @@ Planner 会将用户对不同部件提出的独立要求解析为 `item_requests
 ### `SemanticSearch`
 
 加载本地 Qwen 文本向量模型和离线向量文件，在 SQLite 硬筛选后的候选中返回语义最相近的部件编号。
+
+Planner 会将抽象主题对应的颜色、风格和氛围写入 `keywords`，用于首次大范围召回。当关键词直接命中不足或初次结果无法组成最小搭配时，`QueryExpander` 只补充纹样、剪裁、材质和装饰等细节查询；推荐器使用 RRF 融合原始语义、概括关键词、细节语义和细节关键词结果。有语义要求时按融合排名选择部件。完整搭配必须包含发型、鞋子以及连衣裙或“上衣＋下装”。其他类别分别以 50% 的概率进入本轮候选检索；用户明确指定的部件始终保留。
 
 ### `ToolRegistry`
 

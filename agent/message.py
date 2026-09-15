@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .models import ItemRequest, OutfitItem, OutfitRecommendation, WardrobeQuery
+from .query_expander import QueryExpansion
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class AgentMessage:
     display_mode: Literal["outfit", "item_list"]
     items: tuple[OutfitItem, ...]
     item_requests: tuple[ItemRequest, ...] = ()
+    query_expansions: tuple[QueryExpansion, ...] = ()
 
 
 class MessageProcessor:
@@ -40,6 +42,7 @@ class MessageProcessor:
         query: WardrobeQuery,
         recommendation: OutfitRecommendation,
         item_requests: tuple[ItemRequest, ...] = (),
+        query_expansions: tuple[QueryExpansion, ...] = (),
     ) -> AgentMessage:
         if recommendation.complete:
             lines = ["为你推荐以下搭配："]
@@ -57,12 +60,14 @@ class MessageProcessor:
             display_mode="outfit",
             items=recommendation.items,
             item_requests=item_requests,
+            query_expansions=query_expansions,
         )
 
     def build_item_list_reply(
         self,
         query: WardrobeQuery,
         items: tuple[OutfitItem, ...],
+        query_expansions: tuple[QueryExpansion, ...] = (),
     ) -> AgentMessage:
         if items:
             lines = [f"为你找到以下{items[0].type_zh}："]
@@ -75,6 +80,7 @@ class MessageProcessor:
             query=query,
             display_mode="item_list",
             items=items,
+            query_expansions=query_expansions,
         )
 
 

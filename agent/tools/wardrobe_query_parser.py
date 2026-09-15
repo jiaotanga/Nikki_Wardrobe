@@ -90,10 +90,11 @@ main_style 是部件的属性标签，不代表视觉风格；只有用户明确
 primary_color 只有用户明确提到颜色时才填写；如果原始颜色比合法值更具体，应映射到所属的合法标准色，并将原始细分颜色保留在 semantic_query 和 keywords 中。
 item_name 只有用户明确指定某个部件的确切名称时才原样填写，不得把“红色连衣裙”等描述当作名称。
 semantic_query 使用一句话总结去掉动作和以上硬条件后，用户仍然想要的风格、外观或细节描述；硬条件归一化时丢失的细节也必须保留，没有则填 null。
-keywords 必须从 semantic_query 中提取，只保留具有明确视觉指向的最小语义词，去掉“装饰、图案、设计、元素、风格、感觉”等泛化词，但不要拆分“双马尾、蝴蝶结、玫瑰金”等完整概念；不得扩展或编造，没有则填空数组。
+keywords 用于首次大范围召回：先保留 semantic_query 中具有明确视觉指向的最小语义词；遇到“中式嫁衣、赛博朋克”等抽象主题时，再补充少量能够大范围框定候选的颜色、视觉风格和氛围词。推断词不得与用户明确条件冲突，也不得写入 primary_color 或 main_style 等硬条件。去掉“装饰、图案、设计、元素、风格、感觉”等泛化词，但不要拆分“双马尾、蝴蝶结、玫瑰金”等完整概念；没有则填空数组。
 只要 keywords 不是空数组，semantic_query 就不能是 null；semantic_query 是 null 时，keywords 必须是空数组。
 例如“帮我搜索有珍珠装饰的发型”应解析为 semantic_query="有珍珠装饰"、keywords=["珍珠"]。
 例如“请给我一套红色的古风搭配”应解析为 main_style=null、quality=null、primary_color="红色"、semantic_query="古风"、keywords=["古风"]。
+例如“请给我一套中式嫁衣风搭配”应解析为 primary_color=null、main_style=null、semantic_query="中式嫁衣风"、keywords=["中式嫁衣", "红色", "国风", "华丽", "喜庆"]，其中推断出的颜色和风格只作为软检索关键词。
 例如“请给我一套最高品质、主属性为典雅的搭配”应解析为 main_style="典雅"、quality=5、primary_color=null、semantic_query=null、keywords=[]。
 例如“查询名为芊芊知夏的部件”应解析为 item_name="芊芊知夏"，其他查询条件为 null，keywords=[]。
 main_style 只能从这里选择：{json.dumps(allowed['main_style'], ensure_ascii=False)}

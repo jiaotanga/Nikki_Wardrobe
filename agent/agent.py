@@ -30,6 +30,7 @@ class WardrobeAgent:
         self.message_processor = message_processor or MessageProcessor()
         query_parser = query_parser or WardrobeQueryParserTool()
         recommender = recommender or OutfitRecommendationTool()
+        self.recommender = recommender
         self.planner = planner or WardrobePlanner(query_parser)
         replacement_tool = replacement_tool or OutfitItemReplacementTool(
             recommender.recommend_item
@@ -49,6 +50,7 @@ class WardrobeAgent:
         )
 
     def handle(self, message: UserMessage) -> AgentMessage:
+        self.recommender.clear_query_expansions()
         user_text = self.message_processor.normalize(message)
         plan = self.planner.create_plan(user_text, self.current_outfit)
         query = self.current_query
@@ -77,11 +79,20 @@ class WardrobeAgent:
                 )
             elif step.action == "search_items":
                 items = self.tools.call("search_items", step.query, step.item_type)
-                return self.message_processor.build_item_list_reply(step.query, items)
+                return self.message_processor.build_item_list_reply(
+                    step.query,
+                    items,
+                    tuple(self.recommender.query_expansions),
+                )
 
         self.current_query = query
         self.current_outfit = outfit
-        return self.message_processor.build_outfit_reply(query, outfit, item_requests)
+        return self.message_processor.build_outfit_reply(
+            query,
+            outfit,
+            item_requests,
+            tuple(self.recommender.query_expansions),
+        )
 
 
 def _merge_query(current: WardrobeQuery, update: WardrobeQuery) -> WardrobeQuery:

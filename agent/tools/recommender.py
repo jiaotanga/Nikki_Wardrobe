@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import sqlite3
 from pathlib import Path
 
 from ..models import ItemRequest, OutfitItem, OutfitRecommendation, WardrobeQuery
+from ..query_expander import QueryExpander, QueryExpansion
 from .semantic_search import SemanticSearch
 
 
@@ -14,6 +16,13 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 DATABASE_PATH = PROJECT_DIR / "data" / "database" / "dressup.db"
 DEFAULT_OUTFIT_ID = 10043
 ALLOWED_QUALITIES = (3, 4, 5)
+MIN_DIRECT_MATCHES = 10
+RRF_K = 60
+REQUIRED_ITEM_TYPES = {"hair", "shoes"}
+GARMENT_ITEM_TYPES = {"tops", "bottoms", "dresses"}
+CORE_ITEM_TYPES = REQUIRED_ITEM_TYPES | GARMENT_ITEM_TYPES
+OPTIONAL_ITEM_PROBABILITY = 0.5
+LOGGER = logging.getLogger(__name__)
 
 
 class OutfitRecommendationTool:
@@ -25,10 +34,16 @@ class OutfitRecommendationTool:
         self,
         database_path: str | Path = DATABASE_PATH,
         random_source: random.Random | None = None,
+        query_expander: QueryExpander | None = None,
     ) -> None:
         self.database_path = Path(database_path)
         self.random_source = random_source or random.SystemRandom()
         self.semantic_search: SemanticSearch | None = None
+        self.query_expander = query_expander or QueryExpander()
+        self.query_expansions: list[QueryExpansion] = []
+
+    def clear_query_expansions(self) -> None:
+        self.query_expansions.clear()
 
     def run(
         self,
@@ -47,7 +62,10 @@ class OutfitRecommendationTool:
         if "dresses" in selected_types and {"tops", "bottoms"} & selected_types:
             raise ValueError("不能同时指定连衣裙和上衣或下装")
 
-        candidates = self.query_items(query)
+        candidates = self.query_items(
+            query,
+            included_item_types=self._choose_item_types_for_outfit(),
+        )
         by_type: dict[str, list[OutfitItem]] = {}
         for item in candidates:
             by_type.setdefault(item.type, []).append(item)
@@ -97,8 +115,7 @@ class OutfitRecommendationTool:
             for item_type in ("tops", "bottoms"):
                 add_item(item_type)
 
-        core_types = {"hair", "shoes", "tops", "bottoms", "dresses"}
-        for item_type in sorted(set(by_type) - core_types):
+        for item_type in sorted(set(by_type) - CORE_ITEM_TYPES):
             add_item(item_type)
 
         return _build_recommendation(
@@ -106,6 +123,24 @@ class OutfitRecommendationTool:
             candidate_count=len(candidates),
             garment_structure=garment_structure,
         )
+
+    def _choose_item_types_for_outfit(self) -> tuple[str, ...]:
+        connection = sqlite3.connect(self.database_path)
+        try:
+            item_types = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT DISTINCT type FROM items WHERE quality IN (3, 4, 5)"
+                )
+            }
+        finally:
+            connection.close()
+
+        included_item_types = set(CORE_ITEM_TYPES)
+        for item_type in sorted(item_types - CORE_ITEM_TYPES):
+            if self.random_source.random() < OPTIONAL_ITEM_PROBABILITY:
+                included_item_types.add(item_type)
+        return tuple(sorted(included_item_types))
 
     def recommend_item(
         self,
@@ -133,6 +168,8 @@ class OutfitRecommendationTool:
             ]
         if not candidates:
             raise ValueError(f"没有找到符合条件的{item_type or query.item_name}部件")
+        if query.semantic_query is not None:
+            return candidates[0]
         return self.random_source.choice(candidates)
 
     def load_outfit(
@@ -162,6 +199,7 @@ class OutfitRecommendationTool:
         self,
         query: WardrobeQuery,
         item_type: str | None = None,
+        included_item_types: tuple[str, ...] = (),
         item_ids: tuple[int, ...] = (),
         excluded_item_ids: tuple[int, ...] = (),
     ) -> list[OutfitItem]:
@@ -192,6 +230,10 @@ class OutfitRecommendationTool:
             if item_type is not None:
                 conditions.append("i.type = ?")
                 parameters.append(item_type)
+            if included_item_types:
+                placeholders = ", ".join("?" for _ in included_item_types)
+                conditions.append(f"i.type IN ({placeholders})")
+                parameters.extend(included_item_types)
             if item_ids:
                 placeholders = ", ".join("?" for _ in item_ids)
                 conditions.append(f"i.id IN ({placeholders})")
@@ -235,37 +277,155 @@ class OutfitRecommendationTool:
                 parameters,
             ).fetchall()
             if query.semantic_query:
-                keyword_conditions = [
-                    "i.summary_zh LIKE ?" for _ in query.keywords
-                ]
-                keyword_rows = (
-                    connection.execute(
-                        f"{base_sql} AND ({' OR '.join(keyword_conditions)}) "
-                        "ORDER BY i.id",
-                        [
-                            *parameters,
-                            *(f"%{keyword}%" for keyword in query.keywords),
-                        ],
-                    ).fetchall()
-                    if keyword_conditions
-                    else []
-                )
-                if self.semantic_search is None:
-                    self.semantic_search = SemanticSearch()
-                semantic_ids = self.semantic_search.search(
-                    query.semantic_query,
-                    [int(row["id"]) for row in rows],
-                )
-                keyword_ids = {int(row["id"]) for row in keyword_rows}
+                candidate_ids = [int(row["id"]) for row in rows]
                 rows_by_id = {int(row["id"]): row for row in rows}
-                rows = keyword_rows + [
-                    rows_by_id[item_id]
-                    for item_id in semantic_ids
-                    if item_id not in keyword_ids
+                original_semantic_ids = self._semantic_search(
+                    query.semantic_query,
+                    candidate_ids,
+                )
+                original_keyword_rows = _query_keyword_rows(
+                    connection,
+                    base_sql,
+                    parameters,
+                    query.keywords,
+                )
+                original_keyword_ids = _rank_keyword_rows(
+                    original_keyword_rows,
+                    query.keywords,
+                )
+                initial_ids = tuple(
+                    dict.fromkeys((*original_semantic_ids, *original_keyword_ids))
+                )
+                hard_filter_can_satisfy = (
+                    bool(rows)
+                    if item_type is not None
+                    else _can_form_minimum_outfit(rows)
+                )
+                initial_result_is_complete = (
+                    bool(initial_ids)
+                    if item_type is not None
+                    else _can_form_minimum_outfit(
+                        [rows_by_id[item_id] for item_id in initial_ids]
+                    )
+                )
+
+                ranked_lists: list[list[int]] = [
+                    original_semantic_ids,
+                    original_keyword_ids,
                 ]
+                weights = [1.0, 0.8]
+                if _should_expand_query(
+                    query,
+                    hard_filter_can_satisfy,
+                    initial_result_is_complete,
+                    len(original_keyword_ids),
+                ):
+                    try:
+                        expansion = self.query_expander.expand(query)
+                    except (RuntimeError, ValueError) as error:
+                        LOGGER.warning("查询扩展失败，使用原始查询：%s", error)
+                    else:
+                        if expansion not in self.query_expansions:
+                            self.query_expansions.append(expansion)
+                        detail_ids = self._semantic_search(
+                            expansion.detail_query,
+                            candidate_ids,
+                        )
+                        detail_keyword_ids = _rank_keyword_rows(
+                            _query_keyword_rows(
+                                connection,
+                                base_sql,
+                                parameters,
+                                expansion.detail_keywords,
+                            ),
+                            expansion.detail_keywords,
+                        )
+                        ranked_lists = [
+                            original_semantic_ids,
+                            original_keyword_ids,
+                            detail_ids,
+                            detail_keyword_ids,
+                        ]
+                        weights = [1.0, 0.8, 0.8, 0.8]
+
+                ranked_ids = _rrf_fuse(ranked_lists, weights)
+                rows = [rows_by_id[item_id] for item_id in ranked_ids]
             return [_row_to_item(row) for row in rows]
         finally:
             connection.close()
+
+    def _semantic_search(self, text: str, candidate_ids: list[int]) -> list[int]:
+        if self.semantic_search is None:
+            self.semantic_search = SemanticSearch()
+        return self.semantic_search.search(text, candidate_ids)
+
+
+def _should_expand_query(
+    query: WardrobeQuery,
+    hard_filter_can_satisfy: bool,
+    initial_result_is_complete: bool,
+    direct_match_count: int,
+) -> bool:
+    if query.semantic_query is None or query.item_name is not None:
+        return False
+    if not hard_filter_can_satisfy:
+        return False
+    return (
+        not initial_result_is_complete
+        or direct_match_count < MIN_DIRECT_MATCHES
+    )
+
+
+def _can_form_minimum_outfit(rows: list[sqlite3.Row]) -> bool:
+    item_types = {row["type"] for row in rows}
+    has_hair = "hair" in item_types
+    has_shoes = "shoes" in item_types
+    has_dress = "dresses" in item_types
+    has_separates = {"tops", "bottoms"} <= item_types
+    return has_hair and has_shoes and (has_dress or has_separates)
+
+
+def _query_keyword_rows(
+    connection: sqlite3.Connection,
+    base_sql: str,
+    parameters: list[object],
+    keywords: tuple[str, ...],
+) -> list[sqlite3.Row]:
+    conditions = ["i.summary_zh LIKE ?" for _ in keywords]
+    if not conditions:
+        return []
+    return connection.execute(
+        f"{base_sql} AND ({' OR '.join(conditions)}) ORDER BY i.id",
+        [*parameters, *(f"%{keyword}%" for keyword in keywords)],
+    ).fetchall()
+
+
+def _rank_keyword_rows(
+    rows: list[sqlite3.Row],
+    keywords: tuple[str, ...],
+) -> list[int]:
+    return [
+        int(row["id"])
+        for row in sorted(
+            rows,
+            key=lambda row: (
+                -sum(keyword in (row["summary_zh"] or "") for keyword in keywords),
+                int(row["id"]),
+            ),
+        )
+    ]
+
+
+def _rrf_fuse(
+    ranked_lists: list[list[int]],
+    weights: list[float],
+    rrf_k: int = RRF_K,
+) -> list[int]:
+    scores: dict[int, float] = {}
+    for results, weight in zip(ranked_lists, weights, strict=True):
+        for rank, item_id in enumerate(results, start=1):
+            scores[item_id] = scores.get(item_id, 0.0) + weight / (rrf_k + rank)
+    return sorted(scores, key=lambda item_id: (-scores[item_id], item_id))
 
 
 def _validate_query(connection: sqlite3.Connection, query: WardrobeQuery) -> None:
